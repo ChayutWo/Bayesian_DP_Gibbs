@@ -1,0 +1,278 @@
+
+---
+title: "Multivariate Multinomial Mixture Model"
+output:
+  pdf_document: default
+  html_document:
+    highlight: pygments
+    theme: spacelab
+---
+
+```{r setup, echo =FALSE, include=FALSE}
+# DO NOT ALTER CODE IN THIS CHUNK
+# The very first time you use this R markdown file, you should install each of the packages below.
+# The same goes for other packages you might decide to use
+# Remember that you only need to install each R package once in R (ever -- unless you change computers).
+# All you need to do whenever you need to use the package again (after restarting the R session),
+# is to use the library function to call the package.
+# For example, type install.packages("knitr") in the console to install the knitr package. 
+knitr::opts_chunk$set(echo = TRUE, fig.pos = 'h', fig.align = 'center')
+knitr::opts_chunk$set(fig.cap = "",  fig.path = "Plot")
+library(knitr)
+library(dplyr)
+library(arm)
+library(pROC)
+library(tidyverse)
+library(MASS)
+library(tigerstats)
+library(leaps)
+library(car)
+library(rms)
+require(caret)
+require(e1071)
+library(lme4) 
+library(lattice)
+library(broom)
+library(boot)
+library(ggplot2)
+library(cobalt)
+require(tidyverse)
+require(rstanarm)
+require(magrittr)
+require(rstan)
+require(MCMCpack)
+library(abind)
+library(matrixStats)
+```
+
+* * *
+
+Setting: 
+
+- K = 3 possible clusters (classes) ($\pi$ denotes the mixing proportion)
+
+- For each k, we sample values for three categorical (qualitative) features ($p$ = 3).
+
+- For each feature, there are 3 possible outcome ($J$ = 3) and the probability of them can be characterized by the multinomial probability parameter $\theta_{kp}$ for k = 1, 2, 3 and p = 1, 2, 3
+
+- Use Dirichlet distribution prior for $\pi$ and $\theta_{kp}$ with non-informative prior
+
+Summary on data generating process
+
+$\pi_i \sim Dirichlet(1)$
+
+$\theta_{kp} \sim Dirichlet(1)$
+
+$x_{ip} \mid z_i = k, \theta_{kp} \sim Mult(1, \theta_{kp})$
+
+```{r}
+# Define mixing proportion
+set.seed(0)
+pi_true = c(0.3, 0.1, 0.6)
+
+# Theta 1 for mixture cluster 1
+theta_11_true = c(0.7,0.2,0.1)
+theta_12_true = c(0.1,0.8,0.1)
+theta_13_true =c(0.2,0.1,0.7)
+
+# Theta 2 for mixture cluster 2
+theta_21_true = c(0.05,0.75,0.2)
+theta_22_true = c(0.2,0.15,0.65)
+theta_23_true =c(0.7,0.2,0.1)
+
+# Theta 3 for mixture cluster 3
+theta_31_true = c(0.1,0.1,0.8)
+theta_32_true = c(0.7,0.15,0.15)
+theta_33_true =c(0.1,0.7,0.2)
+
+# Theta row i is cluster i, column j is category j
+theta_p1_true = rbind(theta_11_true, theta_21_true, theta_31_true)
+theta_p2_true = rbind(theta_12_true, theta_22_true, theta_32_true)
+theta_p3_true = rbind(theta_13_true, theta_23_true, theta_33_true)
+
+# Create simulated data
+n = 300
+class_i = rmultinom(n, size = 1, prob = pi_true)
+x1 = c()
+x2 = c()
+x3 = c()
+for (i in 1:n) {
+  x1 = cbind(x1, rmultinom(1, size = 1, prob = theta_p1_true[class_i[, i]==1,]))
+  x2 = cbind(x2, rmultinom(1, size = 1, prob = theta_p2_true[class_i[, i]==1,]))
+  x3 = cbind(x3, rmultinom(1, size = 1, prob = theta_p3_true[class_i[, i]==1,]))
+}
+```
+
+```{r}
+# Prior Parameter
+cluster_num = 3
+category_num = 3
+a_pi = rep(1,cluster_num) # For Dirichlet distribution for pi
+a_theta = rep(1,category_num) # For Dirichlet distribution for theta
+```
+
+Blocked Gibbs Sampling here consists of three major steps (corresponding to 3 parameters of interest $z_i, \theta_p, \pi$)
+
+1. Sample cluster indicator $z_i$ for each $x_i$ from full conditional multinomial distribution
+
+For each i:
+
+$P(z_i = k\mid x_i, \theta, \pi) = \frac{\pi_k \Pi_p\Pi_j P(x_{ipj} \mid z_i = k)^{x_{ipj}}}{\sum_{k} \pi_k \Pi_p\Pi_j P(x_{ipj} \mid z_i = k)^{x_{ipj}}}$
+
+2. Sample $\theta_{kp}$ from the updated (posterior) Dirichlet distribution for each of the 3 clusters
+
+For each k:
+
+$\theta_{kp}\mid x, z \sim Dirichlet(1 + n_{kp1}, 1 + n_{kp2}, 1 + n_{kp3})$
+
+where $n_{kpi}$ is the number of observations found in cluster k in features p that is of category i
+
+3. Sample $\pi$ from the updated (posterior) Dirichlet distribution to obtain the new mixing proportion
+
+$\pi \mid x, z \sim Dirichlet(1 + n_1, 1+n_2, 1+ n_3, 1+n_4)$
+
+where $n_k$ is the number of observations found in cluster k
+
+```{r}
+# Blocked Gibbs Sampling
+set.seed(1)
+# Initialize parameters
+pi = c(0.33, 0.33, 0.34)
+
+theta_1 = c()
+theta_2 = c()
+theta_3 = c()
+for (i in 1:cluster_num) {
+  theta_1 = rbind(theta_1, rdirichlet(1, a_theta))
+  theta_2 = rbind(theta_2, rdirichlet(1, a_theta))
+  theta_3 = rbind(theta_3, rdirichlet(1, a_theta))
+}
+
+# Initialize the sampling matrix
+sample_pi = c()
+sample_pmf1 = c()
+sample_pmf2 = c()
+sample_pmf3 = c()
+for (round in 1:3000) {
+  
+  # Step 1: Sampling cluster indicator
+  z = c()
+  for (i in 1:dim(x1)[2]) {
+    # Calculate the full conditional probability of belonging to cluster k
+    fullcon_zi = pi
+    # First feature
+    fullcon_zi = fullcon_zi*rowProds(t(t(theta_1)^x1[,i]))
+    # Second feature
+    fullcon_zi = fullcon_zi*rowProds(t(t(theta_2)^x2[,i]))
+    # Third feature
+    fullcon_zi = fullcon_zi*rowProds(t(t(theta_3)^x3[,i]))
+    # Scale conditional pmf
+    fullcon_zi = fullcon_zi/sum(fullcon_zi)
+    
+    z = cbind(z, rmultinom(1,1,fullcon_zi))
+  }
+  
+  # Step 2: Update theta
+  for (k in 1:length(pi)) {
+    if (is.null(dim(x1[, z[k,]==1]))) {
+      # only one member of no member
+      if (length(x1[, z[k,]==1] == 0)) {
+        # No member
+        nk1 = rep(0, category_num)
+        nk2 = rep(0, category_num)
+        nk3 = rep(0, category_num)
+      }else{
+        # One member
+        nk1 = x1[, z[k,]==1]
+        nk2 = x2[, z[k,]==1]
+        nk3 = x3[, z[k,]==1]
+      }
+    }else{
+      # More than one member
+      nk1 = apply(x1[, z[k,]==1], MARGIN = 1, FUN = sum)
+      nk2 = apply(x2[, z[k,]==1], MARGIN = 1, FUN = sum)
+      nk3 = apply(x3[, z[k,]==1], MARGIN = 1, FUN = sum)
+    }
+    # Sample theta using full conditional distribution
+    theta_1[k,] = rdirichlet(1, a_theta + nk1)
+    theta_2[k,] = rdirichlet(1, a_theta + nk2)
+    theta_3[k,] = rdirichlet(1, a_theta + nk3)
+  }
+  
+  # Step 3: Update pi
+  n = apply(z, MARGIN = 1, sum)
+  pi = rdirichlet(1, a_pi + n) 
+  sample_pi = rbind(sample_pi, pi)
+  
+  # Record pmf
+  sample_pmf1 = rbind(sample_pmf1, apply(as.vector(pi)*theta_1, MARGIN = 2, sum))
+  sample_pmf2 = rbind(sample_pmf2, apply(as.vector(pi)*theta_2, MARGIN = 2, sum))
+  sample_pmf3 = rbind(sample_pmf3, apply(as.vector(pi)*theta_3, MARGIN = 2, sum))
+}
+
+```
+
+```{r, fig.height=4, fig.width=5, echo= FALSE}
+# Model checking with empirical data
+
+# Feature 1
+theoretical_pmf1 = apply(as.vector(pi_true)*theta_p1_true,MARGIN = 2, sum)
+empirical_pmf1 = apply(x1, MARGIN = 1, mean)
+sampling_pmf1 = apply(sample_pmf1, MARGIN = 2, mean)
+
+df1= rbind(theoretical_pmf1, empirical_pmf1, sampling_pmf1)
+colnames(df1)<- c('cat 1', 'cat 2', 'cat 3')
+barplot(df1, xlab = 'Category', beside = TRUE, 
+        legend = TRUE, main = 'Blocked Gibbs Sampling Assessment: Feature 1')
+
+# Feature 2
+theoretical_pmf2 = apply(as.vector(pi_true)*theta_p2_true,MARGIN = 2, sum)
+empirical_pmf2 = apply(x2, MARGIN = 1, mean)
+sampling_pmf2 = apply(sample_pmf2, MARGIN = 2, mean)
+
+df2 = rbind(theoretical_pmf2, empirical_pmf2, sampling_pmf2)
+colnames(df2)<- c('cat 1', 'cat 2', 'cat 3')
+barplot(df2, xlab = 'Category', beside = TRUE, 
+        legend = TRUE, main = 'Blocked Gibbs Sampling Assessment: Feature 2')
+
+# Feature 3
+theoretical_pmf3 = apply(as.vector(pi_true)*theta_p3_true,MARGIN = 2, sum)
+empirical_pmf3 = apply(x3, MARGIN = 1, mean)
+sampling_pmf3 = apply(sample_pmf3, MARGIN = 2, mean)
+
+df3 = rbind(theoretical_pmf3,empirical_pmf3, sampling_pmf3)
+colnames(df3)<- c('cat 1', 'cat 2', 'cat 3')
+barplot(df3, xlab = 'Category', beside = TRUE, 
+        legend = TRUE, main = 'Blocked Gibbs Sampling Assessment: Feature 3')
+```
+
+```{r, echo = FALSE}
+# Convergence checking Feature 1
+matplot(1:dim(sample_pmf1)[1], sample_pmf1, 
+        type = 'l', ylab = 'Prob', xlab = 'trials', 
+        main = 'Checking stability of marginal pmf of feature 1', ylim = c(0,1))
+
+matplot(1:dim(sample_pmf2)[1], sample_pmf2, 
+        type = 'l', ylab = 'Prob', xlab = 'trials', 
+        main = 'Checking stability of marginal pmf of feature 2', ylim = c(0,1))
+
+matplot(1:dim(sample_pmf3)[1], sample_pmf3, 
+        type = 'l', ylab = 'Prob', xlab = 'trials', 
+        main = 'Checking stability of marginal pmf of feature 3', ylim = c(0,1))
+
+```
+
+
+```{r, echo = FALSE}
+matplot(1:dim(sample_pmf1)[1], sample_pi, type = 'l', ylab = 'Prob', xlab = 'trials', main = 'Label Switching?', ylim = c(0,0.8))
+
+```
+
+```{r, include = FALSE}
+apply(sample_pi, MARGIN = 2, mean)
+```
+
+* * *
+
+
+

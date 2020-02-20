@@ -1,0 +1,89 @@
+
+---
+title: "Multinomial model with Dirichlet prior"
+output:
+  pdf_document: default
+  html_document:
+    highlight: pygments
+    theme: spacelab
+---
+
+```{r setup, echo =FALSE, include=FALSE}
+# DO NOT ALTER CODE IN THIS CHUNK
+# The very first time you use this R markdown file, you should install each of the packages below.
+# The same goes for other packages you might decide to use
+# Remember that you only need to install each R package once in R (ever -- unless you change computers).
+# All you need to do whenever you need to use the package again (after restarting the R session),
+# is to use the library function to call the package.
+# For example, type install.packages("knitr") in the console to install the knitr package. 
+knitr::opts_chunk$set(echo = TRUE, fig.pos = 'h', fig.align = 'center')
+knitr::opts_chunk$set(fig.cap = "",  fig.path = "Plot")
+library(knitr)
+library(dplyr)
+library(arm)
+library(pROC)
+library(tidyverse)
+library(MASS)
+library(tigerstats)
+library(leaps)
+library(car)
+library(rms)
+require(caret)
+require(e1071)
+library(lme4) 
+library(lattice)
+library(broom)
+library(boot)
+library(ggplot2)
+library(cobalt)
+require(tidyverse)
+require(rstanarm)
+require(magrittr)
+require(rstan)
+require(MCMCpack)
+```
+
+* * *
+
+Setting: 
+
+- $\theta = (\theta_1, \theta_2, ..., \theta_6)$ a vector of Multinomial parameter
+
+- For i = 1,..,1000 sample $x_i \sim Mult(1, \theta)$
+
+- prior distribution: $\theta \sim Dir(1)$ the non-informative prior
+
+```{r}
+# Specifying theta
+theta = c(0.1, 0.2, 0.2, 0.3, 0.05, 0.15)
+
+# Simulating the data set of size 1000
+set.seed(0)
+X = rmultinom(n = 1000, size = 1, prob = theta)
+```
+
+```{r}
+# Count the number of elements in each class
+count = apply(X, MARGIN = 1, FUN = sum)
+
+# Dirichlet parameter update
+alpha = rep(1,6) + count
+
+# Sample 10000 theta from posterior distribution
+theta_X = rdirichlet(10000, alpha)
+
+# Calculate average value for each category
+posterior_mean = apply(theta_X,MARGIN = 2, FUN = mean)
+
+# Report output
+output = rbind(theta, posterior_mean)
+output = round(output, 2)
+rownames(output) = c('real value', 'Montecarlo approximate')
+output
+```
+
+
+* * *
+
+
+
