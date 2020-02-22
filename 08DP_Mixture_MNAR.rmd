@@ -158,7 +158,7 @@ marginal_3 = apply(x3[,!indicator], MARGIN = 1, mean)
 x3[,indicator] = rmultinom(sum(indicator), 1, marginal_3)
 ```
 
-Blocked Gibbs Sampling here consists of four major steps 
+Blocked Gibbs Sampling here consists of five major steps 
 
 1. Sample cluster indicator $z_i$ for each $x_i$ from full conditional multinomial distribution
 

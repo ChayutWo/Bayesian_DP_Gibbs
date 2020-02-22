@@ -146,7 +146,7 @@ Ref: https://cran.r-project.org/web/packages/NPBayesImputeCat/NPBayesImputeCat.p
 1. Create and initialize the Rcpp_Lcm model object using CreateModel with the following arguments:
   - X: dataframe to be imptuted = df
   - MCZ: dataframe with the definition of structural zero = NULL
-  - K: the maximum number of mixture components = 30
+  - K: the maximum number of mixture components = 10
   - Nmax: An upper truncation limit for the augmented sample size = 0
   - aalpha: the hyper parameter alpha in stick-breaking prior = 0.25
   - balpha: the hyper parameter beta in stick-breaking prior = 0.25
@@ -168,10 +168,10 @@ Ref: https://cran.r-project.org/web/packages/NPBayesImputeCat/NPBayesImputeCat.p
 ```{r, echo = TRUE, results = 'hide'}
 iter = 10000
 # 1. Create and initialize the Rcpp_Lcm model object
-model = CreateModel(X = df, MCZ = NULL, K = 30, Nmax = 0,
-                    aalpha = 0.25, balpha = 0.25, seed = 1)
+model = CreateModel(X = df, MCZ = NULL, K = 10, Nmax = 0,
+                    aalpha = 0.25, balpha = 0.25, seed = 0)
 # 2. Set tracer
-model$SetTrace(c('k_star', 'psi', 'ImputedX'),iter)
+model$SetTrace(c('k_star', 'psi', 'ImputedX', 'alpha'),iter)
 
 # 3. Run model
 model$Run(5000,iter,1)
@@ -183,6 +183,7 @@ output <- model$GetTrace()
 k_star <- output$k_star
 psi <- output$psi
 imputed_df <- output$ImputedX
+alpha <- output$alpha
 
 #retrieve parameters from the final iteration 
 result <- model$snapshot
@@ -213,10 +214,20 @@ barplot(df3, xlab = 'Category', beside = TRUE,
 
 
 ```{r, echo = FALSE}
+# The number of clusters/latent groups used
 plot(1:length(k_star), k_star, xlab = 'trials', 
      ylab = 'number of active clusters', 
      main = 'Number of clusters used over time', ylim = c(0,30))
 ```
+
+
+```{r, echo = FALSE}
+# sampled alpha value for the stick breaking process
+plot(1:length(alpha), alpha, xlab = 'trials', 
+     ylab = 'alpha', type = 'l',
+     main = 'alpha value for the stick breaking process')
+```
+
 
 * * *
 
