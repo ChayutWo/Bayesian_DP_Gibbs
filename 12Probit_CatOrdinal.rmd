@@ -1,6 +1,6 @@
 
 ---
-title: "Probit regression for ordinal data"
+title: "Probit regression for ordinal data: Categorical features"
 output:
   pdf_document: default
   html_document:
@@ -52,15 +52,15 @@ Setting:
 
 - For each observations, we have 3 associated variables
 
-X1: Continuous variable which we will generate from $Unif(0, 3)$
-X2: Nomial variable with 3 possible outcomes {1,2,3} which we will generate from $Mult(1, [0.2, 0.3, 0.5])$
+X1: Nomial variable with 3 possible outcomes {1,2,3} which we will generate from $Mult(1, [0.2, 0.3, 0.5])$
+X2: Nomial variable with 3 possible outcomes {1,2,3} which we will generate from $Mult(1, [0.3, 0.5, 0.2])$
 Y: Ordinal variable with 5 levels, {1,2,3,4,5} generated using the following process
 
 $\epsilon_i \sim N(0,1)$
-$z_i = \beta^TX_i + \epsilon$ where $X = [X_1, X_2==1, X_2==2, X_2==3]$
+$z_i = \beta^TX_i + \epsilon$ where $X = [X1==1, X1==2, X2==1, X2==2]$ i.e. we drop category (1,1) as the baseline
 $g(z_i) = Y_i$.
 
-Here $\beta = [-3, -2, 2, 4]$ and function $g$ will be the binning function which will bin data into 5 different bins corresponding to 5 possible ordinal outcome.
+Here $\beta = [-3, 2, 2, -4]$ and function $g$ will be the binning function which will bin data into 5 different bins corresponding to 5 possible ordinal outcome.
 
 - We will try to model Y conditioned on other variables (X1, and X2) using probit regression with latent variable Z with rank likelihood on parameter Z.
 
@@ -76,20 +76,20 @@ $z_i \in R(Y)$ where R(Y) = {$z_i$: $z_i > z_j$ if $Y_i > Y_j$ and $z_i < z_j$ i
 # Data generating process
 set.seed(0)
 n = 300
-beta = c(-3, -2, 2, 4)
+beta = c(-3, 2, 2, -4)
 
 # noise term
 epsilon = rnorm(n, mean = 0, sd = 1)
 
 # X1
-X1 = runif(n, 0, 3)
+X1 = t(rmultinom(n, size = 1, prob = c(0.2, 0.3, 0.5)))
 
 # X2
-X2 = t(rmultinom(n, size = 1, prob = c(0.2, 0.3, 0.5)))
+X2 = t(rmultinom(n, size = 1, prob = c(0.3, 0.5, 0.2)))
 
 # X
-X = cbind(X1, X2)
-colnames(X) <- c('X1', 'X2_cat1', 'X2_cat2', 'X2_cat3')
+X = cbind(X1[,2:3], X2[,2:3])
+colnames(X) <- c('X1_cat2', 'X1_cat3', 'X2_cat2', 'X2_cat3')
 
 # Z
 Z = X%*%beta + epsilon
@@ -102,7 +102,6 @@ Y[Z>=g[1] & Z<g[2]] = 2
 Y[Z>=g[2] & Z<g[3]] = 3
 Y[Z>=g[3] & Z<g[4]] = 4
 Y[Z>=g[4]] = 5
-
 ```
 
 Prior specifications:
@@ -170,7 +169,7 @@ for (round in 1:S) {
 ```
 
 ```{r}
-burnin = 10000
+burnin = 5000
 thining = 50
 # Check posterior expectation of beta
 sampling_beta = apply(BETA[seq(burnin, dim(BETA)[1], thining),], MARGIN = 2, mean)

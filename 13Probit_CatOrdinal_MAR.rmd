@@ -1,6 +1,6 @@
 
 ---
-title: "Probit regression for ordinal data"
+title: "Probit regression for ordinal data: MAR"
 output:
   pdf_document: default
   html_document:
@@ -44,6 +44,7 @@ require(MCMCpack)
 library(abind)
 library(matrixStats)
 require(dae)
+require(nnet)
 ```
 
 * * *
@@ -52,15 +53,17 @@ Setting:
 
 - For each observations, we have 3 associated variables
 
-X1: Continuous variable which we will generate from $Unif(0, 3)$
-X2: Nomial variable with 3 possible outcomes {1,2,3} which we will generate from $Mult(1, [0.2, 0.3, 0.5])$
+X1: Nomial variable with 3 possible outcomes {1,2,3} which we will generate from $Mult(1, [0.2, 0.3, 0.5])$
+X2: Nomial variable with 3 possible outcomes {1,2,3} which we will generate from $Mult(1, [0.3, 0.5, 0.2])$
 Y: Ordinal variable with 5 levels, {1,2,3,4,5} generated using the following process
 
 $\epsilon_i \sim N(0,1)$
-$z_i = \beta^TX_i + \epsilon$ where $X = [X_1, X_2==1, X_2==2, X_2==3]$
+$z_i = \beta^TX_i + \epsilon$ where $X = [X1==1, X1==2, X2==1, X2==2]$ i.e. we drop category (1,1) as the baseline
 $g(z_i) = Y_i$.
 
-Here $\beta = [-3, -2, 2, 4]$ and function $g$ will be the binning function which will bin data into 5 different bins corresponding to 5 possible ordinal outcome.
+Here $\beta = [-3, 2, 2, -4]$ and function $g$ will be the binning function which will bin data into 5 different bins corresponding to 5 possible ordinal outcome.
+
+- There will be data missing at random (MAR) in Y. The probability of missingness is govern by $logit(w^Tx_{i} -0.75)$ where $w = [0.4, -0.3, -0.8, 0.3]$. This results in 25% of missing data in the last feature.
 
 - We will try to model Y conditioned on other variables (X1, and X2) using probit regression with latent variable Z with rank likelihood on parameter Z.
 
@@ -76,20 +79,20 @@ $z_i \in R(Y)$ where R(Y) = {$z_i$: $z_i > z_j$ if $Y_i > Y_j$ and $z_i < z_j$ i
 # Data generating process
 set.seed(0)
 n = 300
-beta = c(-3, -2, 2, 4)
+beta = c(-3, 2, 2, -4)
 
 # noise term
 epsilon = rnorm(n, mean = 0, sd = 1)
 
 # X1
-X1 = runif(n, 0, 3)
+X1 = t(rmultinom(n, size = 1, prob = c(0.2, 0.3, 0.5)))
 
 # X2
-X2 = t(rmultinom(n, size = 1, prob = c(0.2, 0.3, 0.5)))
+X2 = t(rmultinom(n, size = 1, prob = c(0.3, 0.5, 0.2)))
 
 # X
-X = cbind(X1, X2)
-colnames(X) <- c('X1', 'X2_cat1', 'X2_cat2', 'X2_cat3')
+X = cbind(X1[,2:3], X2[,2:3])
+colnames(X) <- c('X1_cat2', 'X1_cat3', 'X2_cat2', 'X2_cat3')
 
 # Z
 Z = X%*%beta + epsilon
@@ -102,7 +105,23 @@ Y[Z>=g[1] & Z<g[2]] = 2
 Y[Z>=g[2] & Z<g[3]] = 3
 Y[Z>=g[3] & Z<g[4]] = 4
 Y[Z>=g[4]] = 5
+Z_original = Z
+Y_original = Y
+```
 
+Generate missingness in data
+```{r}
+# Define parameter of logistic function
+w= c(0.4, -0.3, -0.8, 0.3)
+
+# Calculate probability of missingness of features 3
+prob = apply(t(w*t(X)), MARGIN = 1, FUN = sum)-0.75
+prob = 1/(exp(-prob)+1)
+
+# Indicator for X3miss
+indicator = rbernoulli(n = n, p = prob)
+Y[indicator] = NA
+Z[indicator] = NA
 ```
 
 Prior specifications:
@@ -123,21 +142,37 @@ where
 a = max($z_j$ for $Y_j < Y_i$)
 b = min($z_j$ for $Y_j > Y_i$)
 
+For observations where the target is missing, we need not condition on $z_i \in R(Y)$ and the resulting full conditional distribution becomes unconstrained normal distribution.
+
 Note that in the gibbs sampling process, we force the first threshold (g1) to be at the true value in the data generating process otherwise the parameters will be unidentifiable (we can definitely fine infinite combinations of weights parameter to order the outcome according to their target Y: scaling, shifting, etc.)
 
 ```{r}
 # Blocked Gibbs Sampling
-set.seed(1)
+set.seed(2)
 
 # Prior Parameter
 g1 = g[1] #Fix g1 the first cutoff
-Z_i = g1 + Y - 1.5
+
+# Imputation for first trial
+df <- data.frame(cbind(apply(t(t(X1)*c(1,2,3)),1,sum), 
+                       apply(t(t(X2)*c(1,2,3)),1,sum), Y))
+colnames(df) <- c('X1', 'X2', 'Y')
+df$Y <- as.factor(df$Y)
+df$X1 <- as.factor(df$X1)
+df$X2 <- as.factor(df$X2)
+mod <- multinom(Y~., data=df[!is.na(df$Y),])
+
+Y_i = Y
+Y_i[indicator] = predict(mod, newdata = df[is.na(df$Y),], 'class')
+#Y_i[indicator] = 3
+Z_i = g1 + Y_i - 1.5
 variance_beta = (n/(n+1))*solve(t(X)%*%X)
 mean_beta_hat = (n/(n+1))*solve(t(X)%*%X)%*%t(X)
   
 # Initialize the sampling matrix
 S = 30000
 SAMPLED_Z = matrix(nrow=S,ncol=n)
+SAMPLED_Y = matrix(nrow = S, ncol = n)
 BETA = matrix(nrow=S,ncol=4)
 
 for (round in 1:S) {
@@ -150,28 +185,80 @@ for (round in 1:S) {
   # Step 2: Sample Z using inverse cdf appraoch
   for (i in 1:n) {
     # Get the lower and upper bound (a, b) of truncated normal
-    a = max(-Inf, Z_i[Y<Y[i]], na.rm = TRUE)
-    b = min(Z_i[Y>Y[i]],Inf, na.rm = TRUE)
+    a = max(-Inf, Z_i[Y_i<Y[i]], na.rm = TRUE)
+    b = min(Z_i[Y_i>Y[i]], Inf, na.rm = TRUE)
     
     # Force the lowest cutoff to be at g1
-    if (Y[i] == 1) {
-      b = g1
-    }else if (Y[i] == 2) {
-      a = g1
+    if(indicator[i] == FALSE){
+      if (Y_i[i] == 1) {
+        b = g1
+      }else if (Y_i[i] == 2) {
+        a = g1
+      }
     }
-    
     # Sample using inverse cdf
     ez = t(beta_sampled)%*%X[i,]
     u = runif(1, pnorm(a - ez), pnorm(b-ez))
     Z_i[i] = ez + qnorm(u)
+    if (indicator[i]==TRUE) {
+      # Impute Y for missing values
+      if (Z_i[i] < g1) {
+        Y_i[i] = 1
+      }else if (Z_i[i] < min(Z_i[Y==3],na.rm = TRUE)) {
+        Y_i[i] = 2
+      }else if (Z_i[i] < min(Z_i[Y==4],na.rm = TRUE)){
+        Y_i[i] = 3
+      }else if (Z_i[i] < min(Z_i[Y==5],na.rm = TRUE)){
+        Y_i[i] = 4
+      }else{
+        Y_i[i] = 5
+      }
+    }
   }
   SAMPLED_Z[round,] <-  Z_i
+  SAMPLED_Y[round,] <-  Y_i
 }
 ```
 
 ```{r}
-burnin = 10000
-thining = 50
+burnin = 5000
+thining = 100
+# Imputation accuracy
+empirical_pmf3 = table(Y_original)/n
+MAR_missing3 = table(Y[!indicator])/(n-sum(indicator))
+sampling_pmf3 = table(SAMPLED_Y[seq(burnin, dim(BETA)[1], thining),])/
+  sum(table(SAMPLED_Y[seq(burnin, dim(BETA)[1], thining),]))
+
+df3 = rbind(empirical_pmf3, MAR_missing3, sampling_pmf3)
+colnames(df3)<- c('cat 1', 'cat 2', 'cat 3', 'cat 4', 'cat 5')
+barplot(df3, xlab = 'Category', beside = TRUE, 
+        legend = TRUE, args.legend=list(x='bottomleft'),
+        main = 'Blocked Gibbs Sampling Assessment: Marginal Y pmf')
+```
+
+```{r}
+# Imputation accuracy
+MAR_missing3 = table(Y_original[indicator])/sum(indicator)
+sampling_pmf3 = table(SAMPLED_Y[seq(burnin, dim(BETA)[1], thining),indicator])/
+  sum(table(SAMPLED_Y[seq(burnin, dim(BETA)[1], thining), indicator]))
+
+df3 = rbind(MAR_missing3, sampling_pmf3)
+colnames(df3)<- c('cat 1', 'cat 2', 'cat 3', 'cat 4', 'cat 5')
+barplot(df3, xlab = 'Category', beside = TRUE, 
+        legend = TRUE, args.legend=list(x='bottomleft'),
+        main = 'Blocked Gibbs Sampling Assessment: Missing Y pmf')
+```
+
+
+```{r}
+# Imputation accuracy
+true_label = Y_original[indicator]
+sampled_label = SAMPLED_Y[seq(burnin, dim(BETA)[1], thining),indicator]
+mean(t(sampled_label) == true_label)
+```
+
+
+```{r}
 # Check posterior expectation of beta
 sampling_beta = apply(BETA[seq(burnin, dim(BETA)[1], thining),], MARGIN = 2, mean)
 df_beta= cbind(beta, sampling_beta)
@@ -182,10 +269,10 @@ barplot(df_beta, beside = TRUE,
 
 ```{r}
 # Check cut off points
-g1 = apply(SAMPLED_Z[, Y == 1], MARGIN = 1, max)
-g2 = apply(SAMPLED_Z[, Y == 2], MARGIN = 1, max)
-g3 = apply(SAMPLED_Z[, Y == 3], MARGIN = 1, max)
-g4 = apply(SAMPLED_Z[, Y == 4], MARGIN = 1, max)
+g1 = apply(SAMPLED_Z[, Y == 1], MARGIN = 1, max, na.rm = TRUE)
+g2 = apply(SAMPLED_Z[, Y == 2], MARGIN = 1, max, na.rm = TRUE)
+g3 = apply(SAMPLED_Z[, Y == 3], MARGIN = 1, max, na.rm = TRUE)
+g4 = apply(SAMPLED_Z[, Y == 4], MARGIN = 1, max, na.rm = TRUE)
 
 df_g= cbind(g, c(mean(g1[seq(burnin, dim(BETA)[1], thining)]), 
                  mean(g2[seq(burnin, dim(BETA)[1], thining)]), 
