@@ -1,0 +1,144 @@
+
+---
+title: "Multinomial Model for ordinal data: Categorical features"
+output:
+  pdf_document: default
+  html_document:
+    highlight: pygments
+    theme: spacelab
+---
+
+```{r setup, echo =FALSE, include=FALSE}
+# DO NOT ALTER CODE IN THIS CHUNK
+# The very first time you use this R markdown file, you should install each of the packages below.
+# The same goes for other packages you might decide to use
+# Remember that you only need to install each R package once in R (ever -- unless you change computers).
+# All you need to do whenever you need to use the package again (after restarting the R session),
+# is to use the library function to call the package.
+# For example, type install.packages("knitr") in the console to install the knitr package. 
+knitr::opts_chunk$set(echo = TRUE, fig.pos = 'h', fig.align = 'center')
+knitr::opts_chunk$set(fig.cap = "",  fig.path = "Plot")
+library(knitr)
+library(dplyr)
+library(arm)
+library(pROC)
+library(tidyverse)
+library(MASS)
+library(tigerstats)
+library(leaps)
+library(car)
+library(rms)
+require(caret)
+require(e1071)
+library(lme4) 
+library(lattice)
+library(broom)
+library(boot)
+library(ggplot2)
+library(cobalt)
+require(tidyverse)
+require(rstanarm)
+require(magrittr)
+require(rstan)
+require(MCMCpack)
+library(abind)
+library(matrixStats)
+require(dae)
+```
+
+* * *
+
+Setting: 
+
+- For each observations, we have 3 associated variables
+
+X1: Nomial variable with 3 possible outcomes {1,2,3} which we will generate from $Mult(1, [0.2, 0.3, 0.5])$
+X2: Nomial variable with 3 possible outcomes {1,2,3} which we will generate from $Mult(1, [0.3, 0.5, 0.2])$
+Y: Ordinal variable with 5 levels, {1,2,3,4,5} generated using the following process
+
+$\epsilon_i \sim N(0,1)$
+$z_i = \beta^TX_i + \epsilon$ where $X = [X1==1, X1==2, X2==1, X2==2]$ i.e. we drop category (1,1) as the baseline
+$g(z_i) = Y_i$.
+
+Here $\beta = [-3, 2, 2, -4]$ and function $g$ will be the binning function which will bin data into 5 different bins corresponding to 5 possible ordinal outcome.
+
+- We will try to model Y conditioned on other variables (X1, and X2) using multinomial model with the parameter $\theta \in R^{45}$ governing the joint probability $P(X1, X2, Y)$. 
+
+- We have one unknown parameter $\theta$ which we will put Dirichlet distribution prior with parameter $\alpha = 1$ as an noninformative prior.
+
+```{r}
+# Data generating process
+set.seed(0)
+n = 600
+beta = c(-3, 2, 2, -4)
+
+# noise term
+epsilon = rnorm(n, mean = 0, sd = 1)
+
+# X1
+X1 = t(rmultinom(n, size = 1, prob = c(0.2, 0.3, 0.5)))
+
+# X2
+X2 = t(rmultinom(n, size = 1, prob = c(0.3, 0.5, 0.2)))
+
+# X
+X = cbind(X1[,2:3], X2[,2:3])
+colnames(X) <- c('X1_cat2', 'X1_cat3', 'X2_cat2', 'X2_cat3')
+
+# Z
+Z = X%*%beta + epsilon
+
+# Cut-off points and Y
+g = quantile(Z, probs = c(0.2, 0.4, 0.6, 0.8))
+Y = rep(NA, n)
+Y[Z<g[1]] = 1
+Y[Z>=g[1] & Z<g[2]] = 2
+Y[Z>=g[2] & Z<g[3]] = 3
+Y[Z>=g[3] & Z<g[4]] = 4
+Y[Z>=g[4]] = 5
+```
+
+Model specifications:
+
+- $\theta = (\theta_1, \theta_2, ..., \theta_{45})$ a vector of Multinomial parameter
+
+- For all samples $x_i \sim Mult(1, \theta)$ and $x_i = (x_{1i}, x_{2i}, y_i)$
+
+- prior distribution: $\theta \sim Dir(1)$ the non-informative prior
+
+```{r}
+# Data summary: Contingency table
+df <- data.frame(cbind(apply(t(t(X1)*c(1,2,3)),1,sum), 
+                       apply(t(t(X2)*c(1,2,3)),1,sum), Y))
+colnames(df) = c('X1', 'X2', 'Y')
+contingency_table = table(df$X1, df$X2, df$Y)
+
+# Update posterior parameters
+set.seed(1)
+alpha = rep(1, 45) + matrix(contingency_table, nrow =1)
+
+# Sample 10000 theta from posterior distribution
+theta_X = rdirichlet(10000, alpha)
+
+```
+
+```{r}
+# Imputation accuracy
+empirical_pmfy = table(Y)/n
+posterior_pmfy = c(mean(apply(theta_X[, 1:9], MARGIN = 1, sum)),
+                  mean(apply(theta_X[, 10:18], MARGIN = 1, sum)),
+                  mean(apply(theta_X[, 19:27], MARGIN = 1, sum)),
+                  mean(apply(theta_X[, 28:36], MARGIN = 1, sum)),
+                  mean(apply(theta_X[, 37:45], MARGIN = 1, sum)))
+
+df3 = rbind(empirical_pmfy, posterior_pmfy)
+colnames(df3)<- c('cat 1', 'cat 2', 'cat 3', 'cat 4', 'cat 5')
+barplot(df3, xlab = 'Category', beside = TRUE, 
+        legend = TRUE, args.legend=list(x='bottomleft'),
+        main = 'Blocked Gibbs Sampling Assessment: Marginal Y pmf')
+```
+
+* * *
+
+
+

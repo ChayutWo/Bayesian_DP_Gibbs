@@ -1,0 +1,267 @@
+
+---
+title: "Multinomial Model for ordinal data (Asymmetric): MAR"
+output:
+  pdf_document: default
+  html_document:
+    highlight: pygments
+    theme: spacelab
+---
+
+```{r setup, echo =FALSE, include=FALSE}
+# DO NOT ALTER CODE IN THIS CHUNK
+# The very first time you use this R markdown file, you should install each of the packages below.
+# The same goes for other packages you might decide to use
+# Remember that you only need to install each R package once in R (ever -- unless you change computers).
+# All you need to do whenever you need to use the package again (after restarting the R session),
+# is to use the library function to call the package.
+# For example, type install.packages("knitr") in the console to install the knitr package. 
+knitr::opts_chunk$set(echo = TRUE, fig.pos = 'h', fig.align = 'center')
+knitr::opts_chunk$set(fig.cap = "",  fig.path = "Plot")
+library(knitr)
+library(dplyr)
+library(arm)
+library(pROC)
+library(tidyverse)
+library(MASS)
+library(tigerstats)
+library(leaps)
+library(car)
+library(rms)
+require(caret)
+require(e1071)
+library(lme4) 
+library(lattice)
+library(broom)
+library(boot)
+library(ggplot2)
+library(cobalt)
+require(tidyverse)
+require(rstanarm)
+require(magrittr)
+require(rstan)
+require(MCMCpack)
+library(abind)
+library(matrixStats)
+require(dae)
+require(nnet)
+```
+
+* * *
+
+Setting: 
+
+- For each observations, we have 3 associated variables
+
+X1: Nomial variable with 3 possible outcomes {1,2,3} which we will generate from $Mult(1, [0.2, 0.3, 0.5])$
+X2: Nomial variable with 3 possible outcomes {1,2,3} which we will generate from $Mult(1, [0.3, 0.5, 0.2])$
+Y: Ordinal variable with 5 levels, {1,2,3,4,5} generated using the following process
+
+The proportion of members in each ordered category will be asymmetric. Specifically, the percent of each group will be 10%, 20%, 40%, 15%, and 15% respectively.
+
+$\epsilon_i \sim N(0,1)$
+$z_i = \beta^TX_i + \epsilon$ where $X = [X1==2, X1==3, X2==2, X2==3]$ i.e. we drop category (1,1) as the baseline
+$g(z_i) = Y_i$.
+
+Here $\beta = [-3, 2, 2, -4]$ and function $g$ will be the binning function which will bin data into 5 different bins corresponding to 5 possible ordinal outcome.
+
+- There will be data missing at random (MAR) in Y. The probability of missingness is govern by $logit(w^Tx_{i} -0.75)$ where $w = [0.4, -0.3, -0.8, 0.3]$. This results in 25% of missing data in the last feature.
+
+- We will try to model Y conditioned on other variables (X1, and X2) using multinomial model with the parameter $\theta \in R^{45}$ governing the joint probability $P(X1, X2, Y)$. 
+
+- We have one unknown parameter $\theta$ which we will put Dirichlet distribution prior with parameter $\alpha = 1$ as an noninformative prior.
+
+```{r}
+# Data generating process
+set.seed(0)
+n = 600
+beta = c(-3, 2, 2, -4)
+
+# noise term
+epsilon = rnorm(n, mean = 0, sd = 1)
+
+# X1
+X1 = t(rmultinom(n, size = 1, prob = c(0.2, 0.3, 0.5)))
+
+# X2
+X2 = t(rmultinom(n, size = 1, prob = c(0.3, 0.5, 0.2)))
+
+# X
+X = cbind(X1[,2:3], X2[,2:3])
+colnames(X) <- c('X1_cat2', 'X1_cat3', 'X2_cat2', 'X2_cat3')
+
+# Z
+Z = X%*%beta + epsilon
+
+# Cut-off points and Y
+g = quantile(Z, probs = c(0.1, 0.3, 0.7, 0.85))
+Y = rep(NA, n)
+Y[Z<g[1]] = 1
+Y[Z>=g[1] & Z<g[2]] = 2
+Y[Z>=g[2] & Z<g[3]] = 3
+Y[Z>=g[3] & Z<g[4]] = 4
+Y[Z>=g[4]] = 5
+Z_original = Z
+Y_original = Y
+```
+
+Generate missingness in data
+```{r}
+# Define parameter of logistic function
+w= c(0.4, -0.3, -0.8, 0.3)
+
+# Calculate probability of missingness of features 3
+prob = apply(t(w*t(X)), MARGIN = 1, FUN = sum)-0.75
+prob = 1/(exp(-prob)+1)
+
+# Indicator for X3miss
+indicator = rbernoulli(n = n, p = prob)
+Y[indicator] = NA
+Z[indicator] = NA
+```
+
+Model specifications:
+
+- $\theta = (\theta_1, \theta_2, ..., \theta_{45})$ a vector of Multinomial parameter
+
+- For all samples $x_i \sim Mult(1, \theta)$ and $x_i = (x_{1i}, x_{2i}, y_i)$
+
+- prior distribution: $\theta \sim Dir(1)$ the non-informative prior
+
+Blocked Gibbs Sampling here consists of two major steps 
+
+1. Sample new $\theta$ from its full conditional
+
+$\theta \mid X_1, X_2, Y \sim Dir(1 + n_{ijk})$ where $n_{ijk}$ is the number of observations found in class i of $X_1$, class j of $X_2$ and class k of Y
+
+2. for missing data index i, sample $Y_i$ from its full conditional distribution: 
+
+$Y_i \mid X_{1i}, X_{2i}, \theta \sim Mult(1, \theta_{X_{1i}, X_{2i}})$ where $\theta_{X_{1i}, X_{2i}}$ is the conditional probability of Y given values of $X_{1i}$ and $X_{2i}$
+
+```{r}
+# Blocked Gibbs Sampling
+set.seed(0)
+
+# Imputation for first trial
+df <- data.frame(cbind(apply(t(t(X1)*c(1,2,3)),1,sum), 
+                       apply(t(t(X2)*c(1,2,3)),1,sum), Y))
+colnames(df) <- c('X1', 'X2', 'Y')
+df$Y <- as.factor(df$Y)
+df$X1 <- as.factor(df$X1)
+df$X2 <- as.factor(df$X2)
+mod <- multinom(Y~., data=df[!is.na(df$Y),])
+
+Y_i = Y
+Y_i[indicator] = predict(mod, newdata = df[is.na(df$Y),], 'class')
+
+# Initialize the sampling matrix
+S = 30000
+SAMPLED_Y = matrix(nrow = S, ncol = n)
+THETA = matrix(nrow=S,ncol=45)
+
+for (round in 1:S) {
+  # Step 1: Sample Theta
+  # Data summary: Contingency table
+  df <- data.frame(cbind(apply(t(t(X1)*c(1,2,3)),1,sum), 
+                         apply(t(t(X2)*c(1,2,3)),1,sum), Y_i))
+  colnames(df) = c('X1', 'X2', 'Y')
+  contingency_table = table(df$X1, df$X2, df$Y)
+
+  # Update posterior parameter and asmple theta
+  alpha = rep(1, 45) + matrix(contingency_table, nrow =1)
+  theta = rdirichlet(1, alpha)
+  THETA[round,] <- theta
+  
+  # Step 2: Sample missing Y
+  for (i in 1:n) {
+    if (indicator[i]==TRUE) {
+      # The data on Y is missing
+      conditional_prob = theta[seq(df$X1[i] + df$X2[i]*3 - 3, 45, 9)]
+      Y_i[i] = sum(rmultinom(1, size = 1, prob = conditional_prob)*c(1,2,3,4,5))
+    }
+  }
+  SAMPLED_Y[round,] <-  Y_i
+}
+```
+
+```{r}
+burnin = 10000
+thining = 100
+# Imputation accuracy
+empirical_pmf3 = table(Y_original)/n
+MAR_missing3 = table(Y[!indicator])/(n-sum(indicator))
+sampling_pmf3 = table(SAMPLED_Y[seq(burnin, dim(THETA)[1], thining),])/
+  sum(table(SAMPLED_Y[seq(burnin, dim(THETA)[1], thining),]))
+
+df3 = rbind(empirical_pmf3, MAR_missing3, sampling_pmf3)
+colnames(df3)<- c('cat 1', 'cat 2', 'cat 3', 'cat 4', 'cat 5')
+barplot(df3, xlab = 'Category', beside = TRUE, 
+        legend = TRUE, args.legend=list(x='topleft'),
+        main = 'Blocked Gibbs Sampling Assessment: Marginal Y pmf')
+```
+
+
+```{r}
+# Imputation accuracy
+MAR_missing3 = table(Y_original[indicator])/sum(indicator)
+sampling_pmf3 = table(SAMPLED_Y[seq(burnin, dim(THETA)[1], thining),indicator])/
+  sum(table(SAMPLED_Y[seq(burnin, dim(THETA)[1], thining), indicator]))
+
+df3 = rbind(MAR_missing3, sampling_pmf3)
+colnames(df3)<- c('cat 1', 'cat 2', 'cat 3', 'cat 4', 'cat 5')
+barplot(df3, xlab = 'Category', beside = TRUE, 
+        legend = TRUE, args.legend=list(x='bottomleft'),
+        main = 'Blocked Gibbs Sampling Assessment: Missing Y pmf')
+```
+
+
+```{r}
+# Imputation accuracy
+true_label = Y_original[indicator]
+sampled_label = SAMPLED_Y[seq(burnin, dim(THETA)[1], thining),indicator]
+mean(t(sampled_label) == true_label)
+```
+
+
+```{r}
+# Check convergence on theta
+posterior_pmf = cbind(apply(THETA[burnin:dim(THETA)[1], 1:9], 
+                             MARGIN = 1, sum),
+                  apply(THETA[burnin:dim(THETA)[1], 10:18], 
+                             MARGIN = 1, sum),
+                  apply(THETA[burnin:dim(THETA)[1], 19:27], 
+                             MARGIN = 1, sum),
+                  apply(THETA[burnin:dim(THETA)[1], 28:36], 
+                             MARGIN = 1, sum),
+                  apply(THETA[burnin:dim(THETA)[1], 37:45], 
+                             MARGIN = 1, sum))
+colnames(posterior_pmf) <- c('order 1', 'order 2', 'order 3', 'order 4', 'order 5')
+matplot(1:dim(posterior_pmf)[1], posterior_pmf, 
+        type = 'l', ylab = 'marginal prob', xlab = 'trials', 
+        main = 'Checking convergence of theta', ylim = c(0, 0.5))
+```
+
+
+```{r}
+# Check convergence on theta
+posterior_pmf = cbind(apply(THETA[seq(burnin, dim(THETA)[1], thining), 1:9], 
+                             MARGIN = 1, sum),
+                  apply(THETA[seq(burnin, dim(THETA)[1], thining), 10:18], 
+                             MARGIN = 1, sum),
+                  apply(THETA[seq(burnin, dim(THETA)[1], thining), 19:27], 
+                             MARGIN = 1, sum),
+                  apply(THETA[seq(burnin, dim(THETA)[1], thining), 28:36], 
+                             MARGIN = 1, sum),
+                  apply(THETA[seq(burnin, dim(THETA)[1], thining), 37:45], 
+                             MARGIN = 1, sum))
+colnames(posterior_pmf) <- c('order 1', 'order 2', 'order 3', 'order 4', 'order 5')
+matplot(1:dim(posterior_pmf)[1], posterior_pmf, 
+        type = 'l', ylab = 'marginal prob', xlab = 'trials (thinned)', 
+        main = 'Checking convergence of theta: thinned', ylim = c(0, 0.5))
+```
+
+
+* * *
+
+
+

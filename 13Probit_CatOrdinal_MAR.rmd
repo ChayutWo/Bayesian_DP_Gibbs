@@ -58,7 +58,7 @@ X2: Nomial variable with 3 possible outcomes {1,2,3} which we will generate from
 Y: Ordinal variable with 5 levels, {1,2,3,4,5} generated using the following process
 
 $\epsilon_i \sim N(0,1)$
-$z_i = \beta^TX_i + \epsilon$ where $X = [X1==1, X1==2, X2==1, X2==2]$ i.e. we drop category (1,1) as the baseline
+$z_i = \beta^TX_i + \epsilon$ where $X = [X1==2, X1==3, X2==2, X2==3]$ i.e. we drop category (1,1) as the baseline
 $g(z_i) = Y_i$.
 
 Here $\beta = [-3, 2, 2, -4]$ and function $g$ will be the binning function which will bin data into 5 different bins corresponding to 5 possible ordinal outcome.
@@ -78,7 +78,7 @@ $z_i \in R(Y)$ where R(Y) = {$z_i$: $z_i > z_j$ if $Y_i > Y_j$ and $z_i < z_j$ i
 ```{r}
 # Data generating process
 set.seed(0)
-n = 300
+n = 600
 beta = c(-3, 2, 2, -4)
 
 # noise term
@@ -202,13 +202,14 @@ for (round in 1:S) {
     Z_i[i] = ez + qnorm(u)
     if (indicator[i]==TRUE) {
       # Impute Y for missing values
+      Y_i[i] = -1
       if (Z_i[i] < g1) {
         Y_i[i] = 1
-      }else if (Z_i[i] < min(Z_i[Y==3],na.rm = TRUE)) {
+      }else if (Z_i[i] < min(Z_i[Y_i==3],na.rm = TRUE)) {
         Y_i[i] = 2
-      }else if (Z_i[i] < min(Z_i[Y==4],na.rm = TRUE)){
+      }else if (Z_i[i] < min(Z_i[Y_i==4],na.rm = TRUE)){
         Y_i[i] = 3
-      }else if (Z_i[i] < min(Z_i[Y==5],na.rm = TRUE)){
+      }else if (Z_i[i] < min(Z_i[Y_i==5],na.rm = TRUE)){
         Y_i[i] = 4
       }else{
         Y_i[i] = 5
