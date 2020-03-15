@@ -36,6 +36,14 @@ Most of the gibbs samplers here were written without using any external sampling
 * **08DP_Mixture_MNAR**: Same as 05 but with data missing not at random (MNAR) and the goal is to impute the data while preserving the data statistical structure
 * **09DP_Imputation_MNAR**: Same as 08 but instead of writing code from scratch, rely on NPBayesImputeCat package
 Authors
+* **10Probit_Ordinal**: Using probit regression with rank likelihood model for ordinal data Bayesian analysis
+* **11Probit_Ordinal_MAR**: Using probit regression with rank likelihood model for missing data imputation
+* **12Probit_CatOrdinal**: Using probit regression and multinomial model for categorical data (ordinal and nominal)
+* **13Probit_CatOrdinal_MAR**: Using probit regression and multinomial model for missing data imputation (ordinal and nominal data)
+* **14ProbitAsym_CatOrdinal_MAR**: Same as 13 but with asymetric distribution on latent variables for ordinal variables
+* **15MM_CatOrdinal**: Using mixture model for categorical data (ordinal and nominal)
+* **16MM_CatOrdinal_MAR**: Using mixture model for missing data imputation (ordinal and nominal data)
+* **17MMAsym_CatOrdinal_MAR**: Same as 16 but with asymetric distribution on latent variables for ordinal variables
 
 **Chayut Wongkamthong**, Duke University - Initial work
 Acknowledgments
