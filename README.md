@@ -26,15 +26,15 @@ Most of the gibbs samplers here were written without using any external sampling
 
 ## File description
 
-**01Dirichlet_1D**: The basic Multinomial model with Dirichlet prior in which no latent groups are imposed on the data generating process
-**02Dirichlet_Mixtures**: Using Multinomial Mixture Model with gibbs sampling in which latent groups are imposed
-**03Dirichlet_Mixtures_trials**: Same as 02 but instead of a categorical outcome, we have a multinomial trials for each features
-**04Dirichlet_Mixtures_MultD**: Same as 02 but with multiple features with some association conditional on the latent variable
-**05Dirichlet_Process_Mixtures**: Using Dirichlet process to avoid the necessity to prespecifying the number of latent groups/clusters. With this approach, we allow for theoretically infinite mixture model.
-**06DP_Mixture_MAR**: Same as 05 but with data missing at random (MAR) and the goal is to impute the data while preserving the data statistical structure
-**07DP_Imputation_MAR**: Same as 06 but instead of writing code from scratch, rely on NPBayesImputeCat package
-**08DP_Mixture_MNAR**: Same as 05 but with data missing not at random (MNAR) and the goal is to impute the data while preserving the data statistical structure
-**09DP_Imputation_MNAR**: Same as 08 but instead of writing code from scratch, rely on NPBayesImputeCat package
+* **01Dirichlet_1D**: The basic Multinomial model with Dirichlet prior in which no latent groups are imposed on the data generating process
+* **02Dirichlet_Mixtures**: Using Multinomial Mixture Model with gibbs sampling in which latent groups are imposed
+* **03Dirichlet_Mixtures_trials**: Same as 02 but instead of a categorical outcome, we have a multinomial trials for each features
+* **04Dirichlet_Mixtures_MultD**: Same as 02 but with multiple features with some association conditional on the latent variable
+* **05Dirichlet_Process_Mixtures**: Using Dirichlet process to avoid the necessity to prespecifying the number of latent groups/clusters. With this approach, we allow for theoretically infinite mixture model.
+* **06DP_Mixture_MAR**: Same as 05 but with data missing at random (MAR) and the goal is to impute the data while preserving the data statistical structure
+* **07DP_Imputation_MAR**: Same as 06 but instead of writing code from scratch, rely on NPBayesImputeCat package
+* **08DP_Mixture_MNAR**: Same as 05 but with data missing not at random (MNAR) and the goal is to impute the data while preserving the data statistical structure
+* **09DP_Imputation_MNAR**: Same as 08 but instead of writing code from scratch, rely on NPBayesImputeCat package
 Authors
 
 **Chayut Wongkamthong**, Duke University - Initial work
